@@ -556,7 +556,7 @@ if __name__ == "__main__":
     training_config = TrainingConfig(
         model_name="Qwen/Qwen2.5-1.5B-Instruct",
         training_steps=20,  # Use steps
-        batch_size=5,  # Reduced from 2
+        batch_size=8,  # Reduced from 2
         gradient_accumulation_steps=8,  # Reduced from 32
         vllm_restart_interval=3,  # Example interval
         use_wandb=True,  # Set to True to enable logging
