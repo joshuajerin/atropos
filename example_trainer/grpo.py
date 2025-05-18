@@ -56,7 +56,7 @@ class TrainingConfig(BaseModel):
     batch_size: int = Field(
         1, description="Batch size for training (will be handled by get_data)"
     )
-    seq_len: int = Field(2048, description="Sequence length for training")
+    seq_len: int = Field(1024, description="Sequence length for training")
     gradient_accumulation_steps: int = Field(
         8, description="Number of gradient accumulation steps"
     )
@@ -103,12 +103,14 @@ def pad_data_to_good_offset(data, batch_size: int):
     lengths = list()
     for item in data["batch"]:
         scores = item["scores"]
+        original_scores_preview = str(scores)[:100] # Preview original scores
         scores = np.array(scores)
         # check if we have more than 1 score...
         if len(scores) > 1:
             scores = scores - scores.mean()
             scores = scores / max(scores.std(), 1e-8)
         item["scores"] = scores
+        print(f"DEBUG: Item original scores (preview): {original_scores_preview}, processed scores: {item['scores']}") # Added print
         if item["overrides"] is not None:
             for i in range(len(item["overrides"])):
                 if item["overrides"][i].get("set_advantage_to_zero", False):
@@ -143,6 +145,12 @@ def pad_data_to_good_offset(data, batch_size: int):
     token_batches = []
     label_batches = []
     advantage_batches = []
+    if advantages: # Check if advantages list is not empty
+        advantages_np = np.array(advantages)
+        print(f"DEBUG: Overall collected advantages stats before batching: mean={np.mean(advantages_np):.4f}, std={np.std(advantages_np):.4f}, min={np.min(advantages_np):.4f}, max={np.max(advantages_np):.4f}, count={len(advantages_np)}")
+    else:
+        print("DEBUG: No advantages were collected in pad_data_to_good_offset.")
+
     for i in range(len(input_ids) // batch_size):
         token_batches.append(
             torch.tensor(
@@ -367,6 +375,7 @@ def train(config: TrainingConfig):
                 labels.to(config.device),
                 advantages.to(config.device),
             )
+            print(f"DEBUG: Micro-batch advantages: mean={advantages.mean().item():.4f}, std={advantages.std().item():.4f}, min={advantages.min().item():.4f}, max={advantages.max().item():.4f}") # Added print
 
             # Forward pass
             # User specified that tokens/labels are already prepared by get_data
