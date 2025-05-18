@@ -54,11 +54,11 @@ class TrainingConfig(BaseModel):
         10, description="Number of training steps"
     )  # Renamed from epochs
     batch_size: int = Field(
-        2, description="Batch size for training (will be handled by get_data)"
+        1, description="Batch size for training (will be handled by get_data)"
     )
     seq_len: int = Field(2048, description="Sequence length for training")
     gradient_accumulation_steps: int = Field(
-        32, description="Number of gradient accumulation steps"
+        8, description="Number of gradient accumulation steps"
     )
     device: str = Field(
         "cuda" if torch.cuda.is_available() else "cpu", description="Device to train on"
@@ -556,6 +556,8 @@ if __name__ == "__main__":
     training_config = TrainingConfig(
         model_name="Qwen/Qwen2.5-1.5B-Instruct",
         training_steps=20,  # Use steps
+        batch_size=1,  # Reduced from 2
+        gradient_accumulation_steps=8,  # Reduced from 32
         vllm_restart_interval=3,  # Example interval
         use_wandb=True,  # Set to True to enable logging
         wandb_project="grpo-trainer-example",  # Replace with your project name
