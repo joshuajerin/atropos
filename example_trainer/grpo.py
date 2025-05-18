@@ -79,33 +79,6 @@ class TrainingConfig(BaseModel):
     wandb_group: Optional[str] = Field(None, description="Wandb group name")
 
 
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
-def register_trainer(config: TrainingConfig):
-    """
-    Register the trainer with the Atropos API
-    """
-    requests.post(
-        "http://localhost:8000/register",
-        json={
-            "wandb_group": config.wandb_group,
-            "wandb_project": config.wandb_project,
-            "batch_size": config.batch_size * config.gradient_accumulation_steps,
-            "max_token_len": config.seq_len,
-            "starting_step": 0,
-            "checkpoint_dir": config.save_path,
-            "save_checkpoint_interval": config.training_steps,
-            "num_steps": config.training_steps,
-        },
-        timeout=10,
-    )
-
-
-@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=15))
-def get_batch():
-    data = requests.get("http://localhost:8000/batch", timeout=10).json()
-    return data
-
-
 def pad_data_to_good_offset(data, batch_size: int):
     max_token_len = max(
         [max([len(x) for x in item["tokens"]]) for item in data["batch"]]
@@ -190,25 +163,65 @@ def pad_data_to_good_offset(data, batch_size: int):
 
 
 def get_data(
-    batch_size: int, seq_len: int
+    batch_size: int, seq_len: int  # seq_len is not used in this modified version but kept for signature compatibility
 ) -> List[Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]]:
     """
-    getting data from the api
+    Getting data from the local 'environments/rubiks_process_results_20.jsonl' file.
+    Each line in the file is expected to be a JSON object compatible with RubiksCubeScoredDataGroup.
     """
-    batches = []
-    while True:
-        data = get_batch()
-        if data["batch"] is not None:
-            # Save the batch
-            with open("temp.json", "w", encoding="utf-8") as f:
-                json.dump(data, f)
-            # In case the inference runs ahead of the training, we loop until we don't have any more data
-            batches.append(pad_data_to_good_offset(data, batch_size))
-        elif len(batches) > 0:
-            # Return the batches
-            return batches
-        else:
-            time.sleep(1)
+    data_file_path = "../environments/rubiks_process_results_20.jsonl"  # Relative to example_trainer directory
+    
+    loaded_batch_items = []
+    try:
+        with open(data_file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():  # Ensure line is not empty
+                    loaded_batch_items.append(json.loads(line))
+    except FileNotFoundError:
+        print(f"ERROR: Data file not found at {data_file_path}")
+        print(f"Current working directory: {os.getcwd()}")
+        # If you are running grpo.py from the project root, the path should be:
+        # "environments/rubiks_process_results_20.jsonl"
+        # If running from example_trainer/, then "../environments/rubiks_process_results_20.jsonl" is correct.
+        # Let's try the project root path as a fallback.
+        data_file_path_from_root = "environments/rubiks_process_results_20.jsonl"
+        try:
+            with open(data_file_path_from_root, "r", encoding="utf-8") as f:
+                for line in f:
+                    if line.strip():
+                        loaded_batch_items.append(json.loads(line))
+            print(f"Successfully loaded data from fallback path: {data_file_path_from_root}")
+        except FileNotFoundError:
+            print(f"ERROR: Fallback data file not found at {data_file_path_from_root} either.")
+            return [] # Return empty if file not found
+
+    if not loaded_batch_items:
+        print(f"No data loaded from {data_file_path}. Please check the file.")
+        return []
+
+    # The trainer expects data in a dictionary with a "batch" key
+    # Each item in loaded_batch_items is already a RubiksCubeScoredDataGroup-like object.
+    # So, we wrap the list of these items under the "batch" key.
+    data_for_padding = {"batch": loaded_batch_items}
+
+    # Save the loaded data to temp.json for inspection, similar to the original get_data
+    # This helps verify that the data format is what pad_data_to_good_offset expects.
+    # temp.json will contain a dict: {"batch": [list of loaded items]}
+    with open("temp.json", "w", encoding="utf-8") as f:
+        json.dump(data_for_padding, f, indent=2) # indent for readability
+        print(f"Saved the structure of loaded data to temp.json for inspection.")
+
+    # We process the entire file as one large batch of "groups".
+    # pad_data_to_good_offset will then further process this into token_batches, label_batches, etc.
+    # The original get_data returned a list of batches. Here, we return a list containing one mega-batch.
+    # This seems to align with how the training loop consumes it (batches.pop(0)).
+    processed_batch = pad_data_to_good_offset(data_for_padding, batch_size)
+    
+    if not any(processed_batch): # Check if any of the lists (tokens, labels, advantages) are empty
+        print("Warning: pad_data_to_good_offset returned empty batches. Check data format and batch_size.")
+        return []
+        
+    return [processed_batch] # Return as a list containing the single processed batch
 
 
 def train(config: TrainingConfig):
@@ -263,52 +276,55 @@ def train(config: TrainingConfig):
     )
 
     os.makedirs(config.save_path, exist_ok=True)  # Ensure base save directory exists
-    register_trainer(config)
+    # register_trainer(config) # We don't register if loading from file
 
     # Init vllm
-    vllm_command = [
-        "python",
-        "-m",
-        "vllm.entrypoints.openai.api_server",
-        "--model",
-        config.model_name,
-        "--port",
-        str(config.vllm_port),
-        "--dtype",
-        "auto",
-        "--gpu-memory-utilization",
-        "0.45",
-        "--disable-log-requests",
-    ]
-    print(f"  Launching vLLM server: {' '.join(vllm_command)}")
-    try:
-        vllm_process = subprocess.Popen(vllm_command)
-        print(f"  vLLM server launched with PID: {vllm_process.pid}")
-        # Check immediate errors
-        try:
-            stdout, stderr = vllm_process.communicate(timeout=2)
-            if vllm_process.returncode is not None and vllm_process.returncode != 0:
-                print(f"  Error starting vLLM: {stderr.decode()}")
-                vllm_process = None
-                # Maybe raise error or just warn?
-                print("  WARNING: Failed to start vLLM server after checkpoint.")
-        except subprocess.TimeoutExpired:
-            print("  vLLM process started (check logs for details).")
-    except FileNotFoundError:
-        print(
-            "\n *** ERROR: 'python -m vllm...' command not found. Make sure vLLM is installed and accessible. ***\n"
-        )
-        # Potentially stop training or just disable further vLLM restarts
-        print("  Disabling further vLLM restarts.")
-        config.vllm_restart_interval = (
-            config.training_steps + 1
-        )  # Prevent further restarts
-    except Exception as e:
-        print(f"\n *** ERROR: Failed to launch vLLM: {e} ***\n")
-        print("  Disabling further vLLM restarts.")
-        config.vllm_restart_interval = (
-            config.training_steps + 1
-        )  # Prevent further restarts
+    # The vLLM parts might need to be disabled or re-thought if only training on static data.
+    # For now, let's comment out the initial launch and rely on the loop's logic.
+    # If vllm_process remains None, the restart logic might try to launch it later based on a checkpoint.
+    # This might be okay, or might need adjustment if no checkpoints are intended to be served this way.
+    
+    # vllm_command = [
+    #     "python",
+    #     "-m",
+    #     "vllm.entrypoints.openai.api_server",
+    #     "--model",
+    #     config.model_name, # This would be the base model initially
+    #     "--port",
+    #     str(config.vllm_port),
+    #     "--dtype",
+    #     "auto",
+    #     "--gpu-memory-utilization",
+    #     "0.45",
+    #     "--disable-log-requests",
+    # ]
+    # print(f"  Launching vLLM server: {' '.join(vllm_command)}")
+    # try:
+    #     vllm_process = subprocess.Popen(vllm_command)
+    #     print(f"  vLLM server launched with PID: {vllm_process.pid}")
+    #     # Check immediate errors
+    #     try:
+    #         stdout, stderr = vllm_process.communicate(timeout=2)
+    #         if vllm_process.returncode is not None and vllm_process.returncode != 0:
+    #             print(f"  Error starting vLLM: {stderr.decode()}")
+    #             vllm_process = None
+    #             print("  WARNING: Failed to start vLLM server.")
+    #     except subprocess.TimeoutExpired:
+    #         print("  vLLM process started (check logs for details).")
+    # except FileNotFoundError:
+    #     print(
+    #         "\n *** ERROR: 'python -m vllm...' command not found. Make sure vLLM is installed and accessible. ***\n"
+    #     )
+    #     print("  Disabling further vLLM restarts.")
+    #     config.vllm_restart_interval = (
+    #         config.training_steps + 1
+    #     ) 
+    # except Exception as e:
+    #     print(f"\n *** ERROR: Failed to launch vLLM: {e} ***\n")
+    #     print("  Disabling further vLLM restarts.")
+    #     config.vllm_restart_interval = (
+    #         config.training_steps + 1
+    #     )
 
     batches = list()
     for step in range(config.training_steps):
@@ -321,6 +337,9 @@ def train(config: TrainingConfig):
         total_neg = 0
         if len(batches) == 0:
             batches = get_data(config.batch_size, config.seq_len)
+            if not batches:
+                print("No data returned from get_data. Ending training.")
+                break # Exit if no data
         token_batches, label_batches, advantage_batches = batches.pop(0)
         # Terminate existing vLLM process if running
         if (
