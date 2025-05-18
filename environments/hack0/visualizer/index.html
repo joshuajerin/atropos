@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Rubik's Cube Visualizer</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>Rubik's Cube Visualizer</h1>
+        <div id="cube-container"></div>
+        <div id="move-status" class="status-display">
+            <p id="current-move"></p>
+            <p id="move-description"></p>
+        </div>
+        <div class="controls">
+            <button id="randomize-btn">Randomize Cube</button>
+            <button id="reset-btn">Reset Cube</button>
+            <button id="solve-btn">Solve Cube</button>
+            <button id="get-matrix-btn">Export Cube JSON</button>
+        </div>
+        <div class="api-info">
+            <h3>API Access</h3>
+            <p>Get the current cube state via API: <code>GET http://localhost:3000/api/cube-state</code></p>
+            <p><strong>Note:</strong> The cube state is automatically updated on the server whenever the cube changes!</p>
+            <h4>Control the Cube</h4>
+            <p>Send moves to the cube: <code>POST http://localhost:3000/api/move</code> with JSON body: <code>{"move": "R2"}</code></p>
+            <p>Supported moves: U, D, L, R, F, B (clockwise), U', D', L', R', F', B' (counterclockwise), U2, D2, L2, R2, F2, B2 (double)</p>
+        </div>
+    </div>
+
+    <!-- Three.js library -->
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/build/three.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/three@0.132.2/examples/js/controls/OrbitControls.js"></script>
+    
+    <!-- Our cube logic -->
+    <script src="script.js"></script>
+</body>
+</html>

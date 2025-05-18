@@ -1,0 +1,104 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f0f0f0;
+    color: #333;
+}
+
+.container {
+    max-width: 1000px;
+    margin: 0 auto;
+    padding: 20px;
+    text-align: center;
+}
+
+h1 {
+    margin-bottom: 20px;
+    color: #2c3e50;
+}
+
+#cube-container {
+    width: 100%;
+    height: 500px;
+    margin: 20px 0;
+    border-radius: 8px;
+    overflow: hidden;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
+}
+
+.controls {
+    margin: 20px 0;
+    display: flex;
+    justify-content: center;
+    gap: 15px;
+}
+
+button {
+    padding: 10px 20px;
+    background-color: #3498db;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background-color 0.3s;
+}
+
+button:hover {
+    background-color: #2980b9;
+}
+
+/* Status display styles */
+.status-display {
+    margin: 15px auto;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 5px;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+    max-width: 600px;
+}
+
+#current-move {
+    font-size: 18px;
+    font-weight: bold;
+    margin-bottom: 5px;
+}
+
+#move-description {
+    font-size: 16px;
+    color: #555;
+}
+
+/* API Info Section */
+.api-info {
+    margin: 20px auto;
+    padding: 15px;
+    background-color: #f1f8ff;
+    border: 1px solid #cce5ff;
+    border-radius: 5px;
+    max-width: 600px;
+    text-align: left;
+}
+
+.api-info h3 {
+    color: #0066cc;
+    margin-bottom: 10px;
+}
+
+.api-info p {
+    margin: 8px 0;
+    line-height: 1.4;
+}
+
+.api-info code {
+    background-color: #e6f2ff;
+    padding: 3px 6px;
+    border-radius: 3px;
+    font-family: monospace;
+    border: 1px solid #d1e5ff;
+}
