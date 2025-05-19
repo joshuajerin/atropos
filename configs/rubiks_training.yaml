@@ -1,0 +1,28 @@
+# Rubik's Cube Solver Training Configuration
+
+# Flattened configuration for TrainerConfig
+model_name: "NousResearch/DeepHermes-3-Llama-3-8B-Preview"  # Target model for training
+learning_rate: 5.0e-6
+batch_size: 8
+gradient_accumulation_steps: 4
+sequence_length: 2048
+warmup_steps: 100
+
+total_steps: 2000
+eval_every: 50
+save_every: 250
+checkpoint_dir: "./rubiks_checkpoints"
+use_wandb: true
+wandb_project: "atropos-rubiks-cube"
+wandb_run_name: "rubiks-solver-training"
+
+train_file: "/Users/joshuajerin/Desktop/jarvis/atropos/environments/rubiks_process_results_22.jsonl"
+validation_size: 0.1  # 10% for validation
+prefer_higher_scores: true
+max_samples: -1  # Use all samples
+
+method: "GRPO"  # Group Relative Policy Optimization
+temperature: 0.7
+top_p: 0.9
+beta: 0.1  # KL penalty coefficient
+reference_model: "NousResearch/DeepHermes-3-Llama-3-3B-Preview"  # Smaller reference model
