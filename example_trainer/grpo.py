@@ -182,7 +182,7 @@ def get_data(
     Getting data from the local 'environments/rubiks_process_results_20.jsonl' file.
     Each line in the file is expected to be a JSON object compatible with RubiksCubeScoredDataGroup.
     """
-    data_file_path = "../environments/rubiks_process_results_20.jsonl"  # Relative to example_trainer directory
+    data_file_path = "../environments/rubiks_process_results_32.jsonl"  # Relative to example_trainer directory
     
     loaded_batch_items = []
     try:
