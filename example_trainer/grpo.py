@@ -339,116 +339,191 @@ def train(config: TrainingConfig):
     #         config.training_steps + 1
     #     )
 
-    batches = list()
+    batches = list() # This will now hold all data, not just one step's worth
+    print("Loading all training data...")
+    all_data_batches = get_data(config.batch_size, config.seq_len)
+
+    if not all_data_batches:
+        print("No data returned from get_data. Ending training.")
+        if config.use_wandb:
+            wandb.finish()
+        return
+
+    # Assuming get_data returns a list containing one tuple: (token_batches, label_batches, advantage_batches)
+    # If it can return multiple such tuples, the logic here might need to be adjusted
+    # For now, we assume it's a list with one element as per the current get_data implementation.
+    if len(all_data_batches) > 1:
+        print(f"Warning: get_data returned {len(all_data_batches)} sets of batches. Using only the first one.")
+    
+    token_batches_all, label_batches_all, advantage_batches_all = all_data_batches[0]
+    
+    if not token_batches_all:
+        print("No token batches found in the loaded data. Ending training.")
+        if config.use_wandb:
+            wandb.finish()
+        return
+
+    print(f"Data loaded. Number of micro-batches: {len(token_batches_all)}")
+
     for step in range(config.training_steps):
-        total_loss = 0
-        print(f"Step {step+1}/{config.training_steps}")
+        # Shuffle data at the beginning of each epoch if we consider one pass through data as an epoch
+        # For now, we'll just iterate. If training_steps > number of micro-batches, data will repeat.
+        # This part might need more sophisticated handling if true epochs are desired.
+        current_micro_batch_idx = step % len(token_batches_all)
+        
+        tokens = token_batches_all[current_micro_batch_idx]
+        labels = label_batches_all[current_micro_batch_idx]
+        advantages = advantage_batches_all[current_micro_batch_idx]
+        
+        print(f"Step {step+1}/{config.training_steps} (Using micro-batch {current_micro_batch_idx+1}/{len(token_batches_all)})")
+        
+        # Reset accumulators for each step (which is now one micro-batch pass)
+        # total_loss was previously accumulating losses from multiple micro-batches *within* a single get_data call.
+        # Now, one "step" processes one micro-batch from the pre-loaded set.
+        # The grpo_loss is already calculated per micro-batch and scaled by gradient_accumulation_steps.
+        # So, the reported step loss will be this grpo_loss.
+
         total_pos_logp = 0
         total_neg_logp = 0
-        total_logp = 0
+        total_logp = 0 # This might need re-evaluation; it was an average over micro-batches previously
         total_pos = 0
         total_neg = 0
-        if len(batches) == 0:
-            batches = get_data(config.batch_size, config.seq_len)
-            if not batches:
-                print("No data returned from get_data. Ending training.")
-                break # Exit if no data
-        token_batches, label_batches, advantage_batches = batches.pop(0)
-        # Terminate existing vLLM process if running
-        if (
-            step + 1
-        ) % config.vllm_restart_interval == 0 or step == config.training_steps - 1:  # Also restart/save on last step
-            # Terminate existing vLLM process if running
-            if vllm_process:
-                print("  Terminating existing vLLM process...")
-                vllm_process.terminate()
-                try:
-                    vllm_process.wait(timeout=5)
-                except subprocess.TimeoutExpired:
-                    print(
-                        "  Existing vLLM process did not terminate gracefully, killing."
-                    )
-                    vllm_process.kill()
-                    vllm_process.wait()
-                vllm_process = None
-        for tokens, labels, advantages in zip(
-            token_batches, label_batches, advantage_batches
-        ):
+        
+        # The old loop `if len(batches) == 0:` and `batches.pop(0)` is no longer needed
+        # as we are iterating through pre-loaded data.
+        # The inner loop `for tokens, labels, advantages in zip(...)` is also changed
+        # because we are now processing one micro-batch per training step.
 
-            tokens, labels, advantages = (
-                tokens.to(config.device),
-                labels.to(config.device),
-                advantages.to(config.device),
-            )
-            print(f"DEBUG: Micro-batch advantages: mean={advantages.mean().item():.4f}, std={advantages.std().item():.4f}, min={advantages.min().item():.4f}, max={advantages.max().item():.4f}") # Added print
+        tokens, labels, advantages = (
+            tokens.to(config.device),
+            labels.to(config.device),
+            advantages.to(config.device),
+        )
+        print(f"DEBUG: Micro-batch advantages: mean={advantages.mean().item():.4f}, std={advantages.std().item():.4f}, min={advantages.min().item():.4f}, max={advantages.max().item():.4f}")
 
-            # Forward pass
-            # User specified that tokens/labels are already prepared by get_data
-            outputs = model(tokens)  # Assuming model just needs tokens
-            logits = outputs.logits  # Assuming this is the structure
+        # Forward pass
+        outputs = model(tokens)
+        logits = outputs.logits
 
-            # Calculate GRPO loss (reverting to user's previous logic)
-            # User stated ignore_index is -100 and tokens/labels are aligned by get_data
-            # Assuming logits correspond directly to labels indices (no shift needed here)
-            logp_per_token = -F.cross_entropy(
-                logits.view(-1, logits.size(-1)),  # Flatten logits
-                labels.view(-1),  # Flatten labels
-                reduction="none",
-                ignore_index=-100,  # User specified ignore index
-            ).view(
-                labels.shape
-            )  # Reshape back to (batch, seq_len)
+        # Calculate GRPO loss
+        logp_per_token = -F.cross_entropy(
+            logits.view(-1, logits.size(-1)),
+            labels.view(-1),
+            reduction="none",
+            ignore_index=-100,
+        ).view(labels.shape)
 
-            # Masking based on labels != -100
-            mask = (labels != -100).float()
-            with torch.no_grad():
-                pos = (advantages > 0).float()
-                neg = (advantages <= 0).float()
-                avg_logp = (logp_per_token * mask).sum(-1) / mask.sum(-1)
-                pos_logp = (logp_per_token * pos).mean().item()
-                neg_logp = (logp_per_token * neg).mean().item()
-                total_pos_logp += pos_logp
-                total_neg_logp += neg_logp
-                total_logp += avg_logp
-                total_pos += pos.sum().item()
-                total_neg += neg.sum().item()
+        mask = (labels != -100).float()
+        with torch.no_grad():
+            pos_mask = (advantages > 0).float() # Renamed from pos to avoid conflict
+            neg_mask = (advantages <= 0).float() # Renamed from neg
+            
+            # Calculate stats for this micro-batch
+            # Ensure mask.sum(-1) is not zero to avoid division by zero
+            # Sum logp_per_token only where mask is active, then divide by count of active tokens
+            sum_masked_logp = (logp_per_token * mask).sum(-1)
+            count_masked_tokens = mask.sum(-1)
+            
+            # Handle cases where count_masked_tokens might be zero for some items in the batch
+            avg_logp_per_item = torch.zeros_like(sum_masked_logp)
+            valid_mask_items = count_masked_tokens > 0
+            avg_logp_per_item[valid_mask_items] = sum_masked_logp[valid_mask_items] / count_masked_tokens[valid_mask_items]
+            
+            # For logging, we might want the average over the items in the micro-batch
+            current_avg_logp = avg_logp_per_item.mean().item() # Average of per-item average logps
+            
+            # For pos/neg logp, we average over tokens that are positive/negative AND masked
+            # This interpretation aligns with how DPO often calculates these metrics.
+            # Only consider tokens where labels are not -100
+            valid_pos_tokens = pos_mask * mask
+            valid_neg_tokens = neg_mask * mask
 
-            grpo_loss_term = torch.exp(logp_per_token - logp_per_token.detach())
-            grpo_loss = (
-                ((-grpo_loss_term * mask).sum(-1) / mask.sum(-1))
-                * advantages.to(logp_per_token.device)
-            ).mean() / config.gradient_accumulation_steps
-            grpo_loss.backward()
-            total_loss += grpo_loss.item()
+            if valid_pos_tokens.sum() > 0:
+                current_pos_logp = (logp_per_token * valid_pos_tokens).sum() / valid_pos_tokens.sum()
+                total_pos_logp = current_pos_logp.item() # Store for logging
+            else:
+                total_pos_logp = 0 # Or np.nan or some other indicator
+
+            if valid_neg_tokens.sum() > 0:
+                current_neg_logp = (logp_per_token * valid_neg_tokens).sum() / valid_neg_tokens.sum()
+                total_neg_logp = current_neg_logp.item() # Store for logging
+            else:
+                total_neg_logp = 0 # Or np.nan
+
+            total_logp = current_avg_logp # Store for logging; this is per micro-batch average
+            total_pos = valid_pos_tokens.sum().item() # Count of positive advantage tokens in this micro-batch
+            total_neg = valid_neg_tokens.sum().item() # Count of negative advantage tokens
+
+
+        grpo_loss_term = torch.exp(logp_per_token - logp_per_token.detach())
+        
+        # Calculate mean loss per sequence, then mean over batch, then scale by grad accum steps
+        # Ensure mask.sum(-1) is not zero before division
+        masked_sum_loss_term = (-grpo_loss_term * mask).sum(-1)
+        
+        # Initialize per_item_loss to zeros
+        per_item_loss = torch.zeros_like(masked_sum_loss_term)
+        # Only calculate for items where there are valid tokens
+        per_item_loss[valid_mask_items] = masked_sum_loss_term[valid_mask_items] / count_masked_tokens[valid_mask_items]
+        
+        # Multiply by advantages and then take the mean over the batch
+        # advantages has shape (batch_size, 1), per_item_loss has (batch_size)
+        # We need to ensure they are compatible for element-wise multiplication.
+        # Reshape advantages to (batch_size) if it's (batch_size, 1)
+        final_loss_per_item = per_item_loss * advantages.view(-1).to(logp_per_token.device)
+        
+        grpo_loss = final_loss_per_item.mean() / config.gradient_accumulation_steps
+        
+        grpo_loss.backward()
+        # total_loss is now just the grpo_loss for this step, as we process one micro-batch per step.
+        # The accumulation of total_loss over multiple micro-batches within a step is removed.
+        step_loss = grpo_loss.item() * config.gradient_accumulation_steps # Get unscaled loss for logging
+
+        # Gradient accumulation logic:
+        # The optimizer step and zero_grad should only happen after 'gradient_accumulation_steps'
+        # This seems to be missing. The current code does optimizer.step() every micro-batch.
+        # Let's assume for now the user intends to update every micro-batch and gradient_accumulation_steps
+        # is just a scaling factor for the loss. If true accumulation is needed, this needs a rewrite.
+        # The prompt talks about "constant step loss" and "Step Loss: 0.1253" which implies one loss per step.
+        # The division by config.gradient_accumulation_steps and then backward() happens per micro-batch.
+        # optimizer.step() also happens per micro-batch. This means gradient_accumulation_steps is only
+        # scaling the loss, not actually accumulating gradients over multiple batches.
+
+        # If true gradient accumulation is intended, the following should be outside this loop
+        # and happen every `config.gradient_accumulation_steps` micro-batches.
+        # For now, I will keep the existing structure where optimizer.step() is called every micro-batch
+        # as changing that is a more significant alteration of the training loop.
+        # The primary goal here is to fix the "constant loss" by fixing data loading.
+
         grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
         optimizer.zero_grad()
-        if total_pos > 0:
-            total_pos_logp /= total_pos
-        if total_neg > 0:
-            total_neg_logp /= total_neg
-        # --- Wandb Logging ---
+        
+        # Logging for this step (micro-batch)
         if config.use_wandb:
             wandb.log(
                 {
-                    "train/loss": total_loss,
+                    "train/loss": step_loss, # Log the unaccumulated loss for this micro-batch
                     "train/learning_rate": optimizer.param_groups[0]["lr"],
                     "train/grad_norm": grad_norm.item(),
-                    "train/pos_logp": total_pos_logp,
-                    "train/neg_logp": total_neg_logp,
-                    "train/logp": total_logp,
+                    "train/pos_logp_micro": total_pos_logp, # Log per micro-batch
+                    "train/neg_logp_micro": total_neg_logp, # Log per micro-batch
+                    "train/avg_logp_micro": total_logp,     # Log per micro-batch
+                    "train/pos_samples_micro": total_pos,
+                    "train/neg_samples_micro": total_neg,
                 },
                 step=step + 1,
             )
         # --- End Wandb Logging ---
 
-        print(f"  Step Loss: {grpo_loss.item():.4f}")
+        print(f"  Step Loss: {step_loss:.4f}") # Print unscaled loss
 
-        # --- vLLM Restart Logic (Moved AFTER optimizer step) ---
-        # Note: There are much better ways of updating the policy, this is just a very simple example
+        # --- vLLM Restart Logic ---
+        # This logic might need to be adjusted if training_steps means epochs vs micro-batches
+        # Current assumption: training_steps refers to optimizer updates.
         if (
             step + 1
-        ) % config.vllm_restart_interval == 0 or step == config.training_steps - 1:  # Also restart/save on last step
+        ) % config.vllm_restart_interval == 0 or step == config.training_steps - 1:
             checkpoint_path = os.path.join(
                 config.save_path, f"step_{step+1}"
             )  # Save as step+1 since it's after step completion
@@ -572,7 +647,7 @@ if __name__ == "__main__":
         training_steps=20,  # Use steps
         lr=1e-4, # Increased learning rate
         batch_size=4,  # Reduced from 2
-        gradient_accumulation_steps=32,  # Reduced from 32
+        gradient_accumulation_steps=32, 
         vllm_restart_interval=3,  # Example interval
         use_wandb=True,  # Set to True to enable logging
         wandb_project="grpo-trainer-example",  # Replace with your project name
