@@ -102,19 +102,16 @@ def pad_data_to_good_offset(data, batch_size: int):
     advantages = list()
     lengths = list()
     for item in data["batch"]:
-        scores = item["scores"]
-        original_scores_preview = str(scores)[:100] # Preview original scores
-        scores = np.array(scores)
-        # check if we have more than 1 score...
-        if len(scores) > 1:
-            scores = scores - scores.mean()
-            scores = scores / max(scores.std(), 1e-8)
-        item["scores"] = scores
-        print(f"DEBUG: Item original scores (preview): {original_scores_preview}, processed scores: {item['scores']}") # Added print
+        # Store original scores directly, normalization will happen globally later
+        current_item_scores = np.array(item["scores"], dtype=np.float32)
+        print(f"DEBUG: Item original scores (before override): {current_item_scores}")
+
         if item["overrides"] is not None:
             for i in range(len(item["overrides"])):
                 if item["overrides"][i].get("set_advantage_to_zero", False):
-                    item["scores"][i] = 0
+                    current_item_scores[i] = 0
+            print(f"DEBUG: Item scores after override: {current_item_scores}")
+
         for i in range(len(item["tokens"])):
             lengths.append(
                 math.ceil((len(item["tokens"][i]) - 1) / (good_multiple))
@@ -140,17 +137,25 @@ def pad_data_to_good_offset(data, batch_size: int):
             )
             input_ids.append(item["tokens"][i][:-1])
             labels.append(label_item[1:])
-            advantages.append(item["scores"][i])
+            advantages.append(current_item_scores[i]) # Append original/overridden score
+
+    # Global normalization of advantages
+    if advantages: # Check if advantages list is not empty
+        advantages_np = np.array(advantages, dtype=np.float32)
+        print(f"DEBUG: All collected advantages before global normalization: count={len(advantages_np)}, mean={advantages_np.mean():.4f}, std={advantages_np.std():.4f}, min={advantages_np.min():.4f}, max={advantages_np.max():.4f}")
+        if len(advantages_np) > 1:
+            adv_mean = advantages_np.mean()
+            adv_std = advantages_np.std()
+            advantages_np = (advantages_np - adv_mean) / max(adv_std, 1e-8)
+            print(f"DEBUG: All collected advantages after global normalization: mean={advantages_np.mean():.4f}, std={advantages_np.std():.4f}")
+        advantages = advantages_np.tolist() # Convert back to list for stacking
+    else:
+        print("DEBUG: No advantages were collected in pad_data_to_good_offset for global normalization.")
+
     # combine all lists into tensors
     token_batches = []
     label_batches = []
     advantage_batches = []
-    if advantages: # Check if advantages list is not empty
-        advantages_np = np.array(advantages)
-        print(f"DEBUG: Overall collected advantages stats before batching: mean={np.mean(advantages_np):.4f}, std={np.std(advantages_np):.4f}, min={np.min(advantages_np):.4f}, max={np.max(advantages_np):.4f}, count={len(advantages_np)}")
-    else:
-        print("DEBUG: No advantages were collected in pad_data_to_good_offset.")
-
     for i in range(len(input_ids) // batch_size):
         token_batches.append(
             torch.tensor(
