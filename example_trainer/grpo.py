@@ -179,7 +179,7 @@ def get_data(
     batch_size: int, seq_len: int  # seq_len is not used in this modified version but kept for signature compatibility
 ) -> List[Tuple[List[torch.Tensor], List[torch.Tensor], List[torch.Tensor]]]:
     """
-    Getting data from the local 'environments/rubiks_process_results_20.jsonl' file.
+    Getting data from the local 'environments/rubiks_process_results_32.jsonl' file.
     Each line in the file is expected to be a JSON object compatible with RubiksCubeScoredDataGroup.
     """
     data_file_path = "../environments/rubiks_process_results_32.jsonl"  # Relative to example_trainer directory
@@ -194,10 +194,10 @@ def get_data(
         print(f"ERROR: Data file not found at {data_file_path}")
         print(f"Current working directory: {os.getcwd()}")
         # If you are running grpo.py from the project root, the path should be:
-        # "environments/rubiks_process_results_20.jsonl"
-        # If running from example_trainer/, then "../environments/rubiks_process_results_20.jsonl" is correct.
+        # "environments/rubiks_process_results_32.jsonl"
+        # If running from example_trainer/, then "../environments/rubiks_process_results_32.jsonl" is correct.
         # Let's try the project root path as a fallback.
-        data_file_path_from_root = "environments/rubiks_process_results_20.jsonl"
+        data_file_path_from_root = "environments/rubiks_process_results_32.jsonl"
         try:
             with open(data_file_path_from_root, "r", encoding="utf-8") as f:
                 for line in f:
@@ -570,8 +570,9 @@ if __name__ == "__main__":
     training_config = TrainingConfig(
         model_name="Qwen/Qwen2.5-1.5B-Instruct",
         training_steps=20,  # Use steps
+        lr=1e-4, # Increased learning rate
         batch_size=4,  # Reduced from 2
-        gradient_accumulation_steps=8,  # Reduced from 32
+        gradient_accumulation_steps=32,  # Reduced from 32
         vllm_restart_interval=3,  # Example interval
         use_wandb=True,  # Set to True to enable logging
         wandb_project="grpo-trainer-example",  # Replace with your project name
