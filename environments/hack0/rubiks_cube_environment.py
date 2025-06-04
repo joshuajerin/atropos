@@ -1542,7 +1542,7 @@ class RubiksCubeEnv(BaseEnv):
             group_size=16,
             use_wandb=True,
             max_num_workers=128,
-            rollout_server_url="http://localhost:9000",
+            rollout_server_url=f"http://localhost:{os.environ.get('ATROPOS_PORT_RANGE_START', '9000')}",
             total_steps=2000,
             batch_size=1024,
             steps_per_eval=20,

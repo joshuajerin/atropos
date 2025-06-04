@@ -1,4 +1,5 @@
 import argparse
+import os
 import time
 
 import requests
@@ -9,8 +10,13 @@ def update_wandb(health_statuses):
     wandb.log(health_statuses)
 
 
+def get_port_range_start():
+    """Get the starting port for server allocation from environment variable or use default."""
+    return int(os.environ.get("ATROPOS_PORT_RANGE_START", 9000))
+
 def run(api_addr, tp, node_num):
-    print(f"Starting up with {api_addr}, {tp}, {node_num}", flush=True)
+    port_range_start = get_port_range_start()
+    print(f"Starting up with {api_addr}, {tp}, {node_num}, port_range_start={port_range_start}", flush=True)
     while True:
         try:
             data = requests.get(f"{api_addr}/wandb_info").json()
@@ -43,7 +49,7 @@ def run(api_addr, tp, node_num):
         for i in range(8 // tp):
             try:
                 health_status = requests.get(
-                    f"http://localhost:{9000 + i}/health_generate"
+                    f"http://localhost:{port_range_start + i}/health_generate"
                 ).status_code
                 health_statuses[f"server/server_heath_{node_num}_{i}"] = (
                     1 if health_status == 200 else 0

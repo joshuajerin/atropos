@@ -1,6 +1,7 @@
 import asyncio
 import inspect
 import os
+import socket
 from contextlib import asynccontextmanager
 from typing import AsyncGenerator, List, Union
 
@@ -18,12 +19,36 @@ from atroposlib.envs.server_handling.server_harness import ServerHarness
 from atroposlib.envs.server_handling.trl_vllm_server import TrlVllmServer
 
 
+def is_port_available(port):
+    """Check if a port is available."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        try:
+            s.bind(('localhost', port))
+            return True
+        except socket.error:
+            return False
+
+def find_available_port(start_port=9000, max_attempts=100):
+    """Find an available port starting from start_port."""
+    for port in range(start_port, start_port + max_attempts):
+        if is_port_available(port):
+            return port
+    raise RuntimeError(f"Could not find an available port after {max_attempts} attempts starting from {start_port}")
+
+def get_port_range_start():
+    """Get the starting port for server allocation from environment variable or use default."""
+    return int(os.environ.get("ATROPOS_PORT_RANGE_START", 9000))
+
 class ServerManagerConfig(BaseModel):
     slurm: bool = Field(
         default=False, description="Whether environment is running on slurm or not."
     )
     testing: bool = Field(
         default=False, description="If set to True, environment uses mock OpenAI data."
+    )
+    port_range_start: int = Field(
+        default_factory=get_port_range_start, 
+        description="Starting port for server allocation. Default is 9000 or ATROPOS_PORT_RANGE_START env var."
     )
 
 
@@ -34,6 +59,7 @@ class ServerManager:
         server_class: APIServer = APIServer,
         slurm=False,
         testing=False,
+        port_range_start=None,
     ):
         # First we check to see if it's the base server class, and if so, we need to select the appropriate server class
         # You can't use type() to check if it's the base server class, because it's an abstract class, it'll appear as
@@ -53,6 +79,12 @@ class ServerManager:
                     server_class = TrlVllmServer
                 else:
                     raise ValueError(f"Invalid server type: {configs[0].server_type}")
+        # Set the port range start
+        if port_range_start is None:
+            self.port_range_start = get_port_range_start()
+        else:
+            self.port_range_start = port_range_start
+            
         if testing:
             # testing :)
             self.servers = [ServerHarness()]
@@ -71,17 +103,22 @@ class ServerManager:
                 if len(nodelist) < 2:
                     # localhost!
                     for i in range(4):
-                        urls.append(f"http://localhost:{9000 + i + 4}/v1")
+                        # Find available ports dynamically
+                        port = find_available_port(self.port_range_start + i + 4)
+                        urls.append(f"http://localhost:{port}/v1")
                 else:
                     num_training_nodes = int(os.environ.get("NUM_TRAINING_NODES"))
                     for node in nodelist[num_training_nodes:]:
                         for i in range(8 // os.environ.get("INFER_TP", 1)):
-                            urls.append(f"http://{node}:{9000 + i}/v1")
+                            # Use the configured port range start
+                            urls.append(f"http://{node}:{self.port_range_start + i}/v1")
                 openai_configs = []
             else:
                 # localhost!
                 for i in range(4):
-                    urls.append(f"http://localhost:{9000 + i + 4}/v1")
+                    # Find available ports dynamically for localhost
+                    port = find_available_port(self.port_range_start + i + 4)
+                    urls.append(f"http://localhost:{port}/v1")
                 openai_configs = []
             for url in urls:
                 openai_configs.append(
@@ -118,7 +155,8 @@ class ServerManager:
                 if node == "":
                     continue
                 for i in range(8 // os.environ.get("INFER_TP", 1)):
-                    urls.append(f"http://{node}:{9000 + i}/v1")
+                    # Use the configured port range start
+                    urls.append(f"http://{node}:{self.port_range_start + i}/v1")
             # assume at least one good config is passed in
             new_configs = []
             for i in range(len(urls)):
