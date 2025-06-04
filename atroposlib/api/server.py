@@ -1,21 +1,25 @@
+import os
 import time
 import uuid
 from typing import Any, List, Optional
 
-from fastapi import FastAPI, status
+from fastapi import Depends, FastAPI, Security, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import PlainTextResponse
 from pydantic import BaseModel
 
+from atroposlib.api.security import get_api_key, get_default_api_key, create_api_key, ApiKeyInfo
 from atroposlib.api.utils import grab_exact_from_heterogeneous_queue
 
 app = FastAPI(title="AtroposLib API")
 
+# Configure CORS with more restricted settings
+allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:8000,http://localhost:5002").split(",")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=allowed_origins,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -23,6 +27,22 @@ app.add_middleware(
 @app.get("/")
 async def root():
     return {"message": "AtroposLib API"}
+
+
+@app.get("/api-key")
+async def get_key_info(api_key: str = Depends(get_api_key)):
+    """Get information about the current API key"""
+    return {"status": "valid", "key": api_key[:8] + "..."}
+
+
+@app.post("/create-api-key")
+async def generate_api_key(days: int = 30, api_key: str = Depends(get_api_key)):
+    """Create a new API key (requires existing valid API key)"""
+    new_key_info = create_api_key(days)
+    return {
+        "key": new_key_info.key,
+        "expires": new_key_info.expires.isoformat()
+    }
 
 
 class Registration(BaseModel):
@@ -74,7 +94,7 @@ class Info(BaseModel):
 
 
 @app.post("/register")
-async def register(registration: Registration):
+async def register(registration: Registration, api_key: str = Depends(get_api_key)):
     try:
         isinstance(app.state.queue, list)
     except AttributeError:
@@ -99,7 +119,7 @@ async def register(registration: Registration):
 
 
 @app.post("/register-env")
-async def register_env_url(register_env: RegisterEnv):
+async def register_env_url(register_env: RegisterEnv, api_key: str = Depends(get_api_key)):
     try:
         if not app.state.started:
             return {
@@ -146,7 +166,7 @@ async def register_env_url(register_env: RegisterEnv):
 
 
 @app.post("/disconnect-env")
-async def disconnect_env(disconnect_env: EnvIdentifier):
+async def disconnect_env(disconnect_env: EnvIdentifier, api_key: str = Depends(get_api_key)):
     try:
         app.state.envs[disconnect_env.env_id]["connected"] = False
         return {"status": "success"}
@@ -155,7 +175,7 @@ async def disconnect_env(disconnect_env: EnvIdentifier):
 
 
 @app.get("/wandb_info")
-async def wandb_info():
+async def wandb_info(api_key: str = Depends(get_api_key)):
     try:
         return {"group": app.state.group, "project": app.state.project}
     except AttributeError:
@@ -163,7 +183,7 @@ async def wandb_info():
 
 
 @app.get("/info")
-async def info():
+async def info(api_key: str = Depends(get_api_key)):
     try:
         return {
             "batch_size": app.state.batchsize,
@@ -174,7 +194,7 @@ async def info():
 
 
 @app.get("/batch")
-async def get_batch():
+async def get_batch(api_key: str = Depends(get_api_key)):
     if not app.state.started:
         app.state.started = True
 
@@ -204,7 +224,7 @@ async def get_batch():
 
 
 @app.get("/latest_example")
-async def get_latest_example():
+async def get_latest_example(api_key: str = Depends(get_api_key)):
     try:
         return app.state.latest
     except AttributeError:
@@ -218,7 +238,7 @@ async def get_latest_example():
 
 
 @app.post("/scored_data")
-async def scored_data(scored_data: ScoredData):
+async def scored_data(scored_data: ScoredData, api_key: str = Depends(get_api_key)):
     app.state.queue.append(
         {
             "tokens": scored_data.tokens,
@@ -235,7 +255,7 @@ async def scored_data(scored_data: ScoredData):
 
 
 @app.post("/scored_data_list")
-async def scored_data_list(scored_data_list: List[ScoredData]):
+async def scored_data_list(scored_data_list: List[ScoredData], api_key: str = Depends(get_api_key)):
     """Handle a list of ScoredData objects for step-based learning"""
 
     for idx, scored_data in enumerate(scored_data_list):
@@ -259,7 +279,7 @@ async def scored_data_list(scored_data_list: List[ScoredData]):
 
 
 @app.get("/status")
-async def get_status():
+async def get_status(api_key: str = Depends(get_api_key)):
     try:
         return {
             "current_step": app.state.status_dict["step"],
@@ -270,7 +290,7 @@ async def get_status():
 
 
 @app.get("/status-env")
-async def get_status_env(env: EnvIdentifier):
+async def get_status_env(env: EnvIdentifier, api_key: str = Depends(get_api_key)):
     total = sum(
         [
             x["max_context_len"] * max(0.0, x["weight"])
@@ -299,7 +319,7 @@ async def get_status_env(env: EnvIdentifier):
 
 
 @app.get("/reset_data")
-async def reset_data():
+async def reset_data(api_key: str = Depends(get_api_key)):
     try:
         del app.state.queue
         app.state.group = None

@@ -35,22 +35,48 @@ This API typically sits within a larger RL system:
 
 ## Running the Server
 
-with the repository installed we provide a helper script to run the server:
+With the repository installed, we provide a helper script to run the server:
 
 ```bash
 run-api
 ```
-if you need more control over the server you can run it directly with:
+
+By default, the server will run on localhost (127.0.0.1) for improved security. For more control over the server, you can run it with additional options:
 
 ```bash
-uvicorn atroposlib.api.server:app --host 0.0.0.0 --port 8000 --reload
+# Basic secure usage (recommended for development)
+run-api --host 127.0.0.1 --port 8000
+
+# Show the current API key
+run-api --show-api-key
+
+# Enable SSL/TLS with certificates (recommended for production)
+run-api --host 0.0.0.0 --port 8000 --use-ssl --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem
 ```
 
-* `--host 0.0.0.0`: Makes the server accessible on your network.
-* `--port 8000`: Specifies the port (change if needed).
-* `--reload`: Enables auto-reloading on code changes (for development). Remove for production.
+## Security Considerations
 
-The API documentation (Swagger UI) will be available at `http://<your-server-ip>:8000/docs`.
+The API server uses several security mechanisms to protect your data:
+
+1. **API Key Authentication**: All endpoints require an API key to be provided in the `X-API-Key` header. This key is automatically generated when the server starts, or you can set your own with the `ATROPOS_API_KEY` environment variable.
+
+2. **Host Binding Options**:
+   * `--host 127.0.0.1` (default): Only accessible from the local machine, providing maximum security.
+   * `--host 0.0.0.0`: Makes the server accessible on your network. **Only use with additional security measures**.
+
+3. **SSL/TLS Encryption** (recommended for production):
+   * Enable with `--use-ssl --ssl-cert /path/to/cert.pem --ssl-key /path/to/key.pem`
+   * Generate self-signed certificates for testing: `openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365`
+
+4. **CORS Restrictions**:
+   * By default, only specific origins are allowed (configurable via the `ALLOWED_ORIGINS` environment variable)
+
+5. **Additional Production Recommendations**:
+   * Use a reverse proxy (like Nginx) with additional security configurations
+   * Implement firewall rules to restrict access to the server port
+   * Run the service within a restricted container or VM
+
+The API documentation (Swagger UI) will be available at `http://localhost:8000/docs` or `https://<your-server-ip>:8000/docs` (if using SSL/TLS).
 
 ## API Endpoints
 
@@ -59,6 +85,19 @@ The API documentation (Swagger UI) will be available at `http://<your-server-ip>
 * `GET /`
     * **Description:** Root endpoint for basic health check.
     * **Response:** `{"message": "AtroposLib API"}`
+
+### Authentication
+
+* `GET /api-key`
+    * **Description:** Check if your API key is valid.
+    * **Headers Required:** `X-API-Key: <your_api_key>`
+    * **Response:** `{"status": "valid", "key": "<first_8_chars>..."}`
+
+* `POST /create-api-key`
+    * **Description:** Generate a new API key (requires existing valid API key).
+    * **Headers Required:** `X-API-Key: <your_api_key>`
+    * **Query Parameter:** `days` - Optional expiration in days (default: 30)
+    * **Response:** `{"key": "<new_api_key>", "expires": "<expiration_iso_datetime>"}`
 
 ### Trainer Registration & Info
 
@@ -180,3 +219,8 @@ The API documentation (Swagger UI) will be available at `http://<your-server-ip>
 * **In-Memory State:** The primary limitation is that all queues, configurations, and states are stored in the FastAPI application's memory (`app.state`).
     * **No Persistence:** Data is lost if the server restarts.
     * **Scalability Bottleneck:** API cannot scale beyond a single server instance easily.
+
+* **Security Considerations:**
+    * The API key system currently stores keys in memory. In a production environment, consider using a more robust authentication system.
+    * API keys don't have different permission levels. A future enhancement could add role-based access control.
+    * For high-security environments, consider implementing additional security measures like IP whitelisting and request rate limiting.
